@@ -23,7 +23,7 @@ on:
         default: 'false'
 
 env:
-  BUILD_XCODE_PATH: /Applications/Xcode_15.1.app
+  BUILD_XCODE_PATH: /Applications/Xcode_15.0.1.app
   RUNNER_IMAGE: macos-13
 
 jobs:
@@ -53,13 +53,7 @@ jobs:
     strategy:
       matrix:
         arch: [arm64]
-        platform: [ios, ios_simulator, ios-tci, macos, visionos, visionos_simulator, visionos-tci]
-        include:
-          # x86_64 supported only for macOS and simulators
-          - arch: x86_64
-            platform: macos
-          - arch: x86_64
-            platform: ios_simulator
+        platform: [ios]
     steps:
       - name: Checkout
         uses: actions/checkout@v3
@@ -79,12 +73,13 @@ jobs:
       - name: Setup Path
         shell: bash
         run: |
-          echo "/usr/local/opt/bison/bin:/opt/homebrew/opt/bison/bin" >> $GITHUB_PATH
+          echo "$(brew --prefix)/opt/python@3.10/libexec/bin:/usr/local/opt/bison/bin:/opt/homebrew/opt/bison/bin" >> $GITHUB_PATH
       - name: Install Requirements
-        if: (steps.cache-sysroot.outputs.cache-hit != 'true' || github.event.inputs.rebuild_sysroot == 'true') && needs.configuration.outputs.runner == env.RUNNER_IMAGE
+        if: steps.cache-sysroot.outputs.cache-hit != 'true' || github.event.inputs.rebuild_sysroot == 'true'
         run: |
           brew uninstall cmake
-          brew install bison pkg-config gettext glib-utils libgpg-error nasm make meson
+          HOMEBREW_NO_AUTO_UPDATE=1 brew install bison pkg-config gettext glib-utils libgpg-error nasm make meson python@3.10
+          python3 -V
           pip3 install --user six pyparsing
           rm -f /usr/local/lib/pkgconfig/*.pc
       - name: Build Sysroot
@@ -101,51 +96,6 @@ jobs:
         with:
           name: Sysroot-${{ matrix.platform }}-${{ matrix.arch }}
           path: sysroot.tgz
-  build-sysroot-universal:
-    name: Build Sysroot (Universal Mac)
-    runs-on: ${{ fromJSON(needs.configuration.outputs.github-runner) }}
-    needs: [configuration, build-sysroot]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-      - name: Cache Sysroot (Universal Mac)
-        id: cache-sysroot-universal
-        uses: osy/actions-cache@v3
-        with:
-          path: sysroot-macOS-arm64_x86_64
-          key: macos-universal-${{ hashFiles('scripts/build_dependencies.sh', 'scripts/pack_dependencies.sh') }}-${{ hashFiles('patches/**') }}
-      - name: Cache Sysroot (arm64)
-        if: steps.cache-sysroot-universal.outputs.cache-hit != 'true'
-        id: cache-sysroot-arm64
-        uses: osy/actions-cache@v3
-        with:
-          path: sysroot-macos-arm64
-          key: macos-arm64-${{ hashFiles('scripts/build_dependencies.sh') }}-${{ hashFiles('patches/**') }}
-      - name: Cache Sysroot (x86_64)
-        if: steps.cache-sysroot-universal.outputs.cache-hit != 'true'
-        id: cache-sysroot-x86_64
-        uses: osy/actions-cache@v3
-        with:
-          path: sysroot-macos-x86_64
-          key: macos-x86_64-${{ hashFiles('scripts/build_dependencies.sh') }}-${{ hashFiles('patches/**') }}
-      - name: Check Cache
-        if: steps.cache-sysroot-universal.outputs.cache-hit != 'true' && (steps.cache-sysroot-arm64.outputs.cache-hit != 'true' || steps.cache-sysroot-x86_64.outputs.cache-hit != 'true')
-        uses: actions/github-script@v6
-        with:
-          script: core.setFailed('Cached sysroot not found!')
-      - name: Pack Universal Sysroot
-        if: steps.cache-sysroot-universal.outputs.cache-hit != 'true'
-        run: |
-          ./scripts/pack_dependencies.sh . macos arm64 x86_64
-      - name: Compress Sysroot
-        if: steps.cache-sysroot-universal.outputs.cache-hit != 'true' || github.event_name == 'release' || github.event.inputs.test_release == 'true'
-        run: tar -acf sysroot.tgz sysroot-macOS-arm64_x86_64
-      - name: Upload Sysroot
-        if: steps.cache-sysroot-universal.outputs.cache-hit != 'true' || github.event_name == 'release' || github.event.inputs.test_release == 'true'
-        uses: actions/upload-artifact@v3
-        with:
-          name: Sysroot-macos-universal
-          path: sysroot.tgz
   build-utm:
     name: Build UTM
     runs-on: ${{ fromJSON(needs.configuration.outputs.runner) }}
@@ -153,13 +103,7 @@ jobs:
     strategy:
       matrix:
         arch: [arm64]
-        platform: [ios, ios_simulator, ios-tci, macos, visionos, visionos_simulator, visionos-tci]
-        include:
-          # x86_64 supported only for macOS and simulators
-          - arch: x86_64
-            platform: macos
-          - arch: x86_64
-            platform: ios_simulator
+        platform: [ios]
     steps:
       - name: Checkout
         uses: actions/checkout@v3
@@ -189,41 +133,6 @@ jobs:
         with:
           name: UTM-${{ matrix.platform }}-${{ matrix.arch }}
           path: UTM.xcarchive.tgz
-  build-universal:
-    name: Build UTM (Universal Mac)
-    runs-on: ${{ fromJSON(needs.configuration.outputs.runner) }}
-    needs: [configuration, build-sysroot-universal]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-        with:
-          submodules: recursive
-      - name: Cache Sysroot
-        id: cache-sysroot
-        uses: osy/actions-cache@v3
-        with:
-          path: sysroot-macOS-arm64_x86_64
-          key: macos-universal-${{ hashFiles('scripts/build_dependencies.sh', 'scripts/pack_dependencies.sh') }}-${{ hashFiles('patches/**') }}
-      - name: Check Cache
-        if: steps.cache-sysroot.outputs.cache-hit != 'true'
-        uses: actions/github-script@v6
-        with:
-          script: core.setFailed('Cached sysroot not found!')
-      - name: Setup Xcode
-        shell: bash
-        run: |
-          [[ "$(xcode-select -p)" == "${{ env.BUILD_XCODE_PATH }}"* ]] || sudo xcode-select -s "${{ env.BUILD_XCODE_PATH }}"
-      - name: Build UTM
-        run: |
-          ./scripts/build_utm.sh -t "$SIGNING_TEAM_ID" -p macos -a "arm64 x86_64" -o UTM
-          tar -acf UTM.xcarchive.tgz UTM.xcarchive
-        env:
-          SIGNING_TEAM_ID: ${{ vars.SIGNING_TEAM_ID }}
-      - name: Upload UTM
-        uses: actions/upload-artifact@v3
-        with:
-          name: UTM-macos-universal
-          path: UTM.xcarchive.tgz
   package-ios:
     name: Package (iOS)
     runs-on: ${{ fromJSON(needs.configuration.outputs.github-runner) }}
@@ -232,11 +141,8 @@ jobs:
       matrix:
         configuration: [
           {platform: "ios", mode: "ipa", name: "UTM.ipa", path: "UTM.ipa"},
-          {platform: "ios-tci", mode: "ipa-se", name: "UTM-SE.ipa", path: "UTM SE.ipa"},
           {platform: "ios", mode: "ipa-hv", name: "UTM-HV.ipa", path: "UTM.ipa"},
           {platform: "ios", mode: "deb", name: "UTM.deb", path: "UTM.deb"},
-          {platform: "visionos", mode: "ipa", name: "UTM-visionOS.ipa", path: "UTM.ipa"},
-          {platform: "visionos-tci", mode: "ipa-se", name: "UTM-SE-visionOS.ipa", path: "UTM SE.ipa"}
         ]
     if: github.event_name == 'release' || github.event.inputs.test_release == 'true'
     steps:
@@ -268,137 +174,3 @@ jobs:
           asset_path: ${{ matrix.configuration.path }}
           asset_name: ${{ matrix.configuration.name }}
           asset_content_type: application/octet-stream
-  dispatch-ios:
-    name: Dispatch (iOS)
-    runs-on: ubuntu-latest
-    needs: package-ios
-    if: github.event_name == 'release'
-    steps:
-      - name: Update AltStore Repository
-        continue-on-error: true
-        uses: peter-evans/repository-dispatch@v1
-        with:
-          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
-          repository: ${{ vars.DISPATCH_ALTSTORE_REPO_NAME }}
-          event-type: new-release
-      - name: Update Cydia Repository
-        continue-on-error: true
-        uses: peter-evans/repository-dispatch@v1
-        with:
-          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
-          repository: ${{ vars.DISPATCH_CYDIA_REPO_NAME }}
-          event-type: new-release
-  package-mac:
-    name: Package (macOS)
-    runs-on: ${{ fromJSON(needs.configuration.outputs.github-runner) }}
-    needs: [configuration, build-universal]
-    if: github.event_name == 'release' || github.event.inputs.test_release == 'true'
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-      - name: Import signing certificate into keychain
-        uses: apple-actions/import-codesign-certs@v1
-        with:
-          p12-file-base64: ${{ secrets.SIGNING_CERTIFICATE_P12_DATA }}
-          p12-password: ${{ secrets.SIGNING_CERTIFICATE_PASSWORD }}
-      - name: Install Provisioning Profiles
-        run: |
-          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-          echo $PROFILE_DATA | base64 --decode -o ~/Library/MobileDevice/Provisioning\ Profiles/$PROFILE_UUID.provisionprofile
-          echo $HELPER_PROFILE_DATA | base64 --decode -o ~/Library/MobileDevice/Provisioning\ Profiles/$HELPER_PROFILE_UUID.provisionprofile
-          echo $LAUNCHER_PROFILE_DATA | base64 --decode -o ~/Library/MobileDevice/Provisioning\ Profiles/$LAUNCHER_PROFILE_UUID.provisionprofile
-        env:
-          PROFILE_DATA: ${{ vars.PROFILE_DATA }}
-          PROFILE_UUID: ${{ vars.PROFILE_UUID }}
-          HELPER_PROFILE_DATA: ${{ vars.HELPER_PROFILE_DATA }}
-          HELPER_PROFILE_UUID: ${{ vars.HELPER_PROFILE_UUID }}
-          LAUNCHER_PROFILE_DATA: ${{ vars.LAUNCHER_PROFILE_DATA }}
-          LAUNCHER_PROFILE_UUID: ${{ vars.LAUNCHER_PROFILE_UUID }}
-      - name: Install appdmg
-        run: npm install -g appdmg
-      - name: Download Artifact
-        uses: actions/download-artifact@v3
-        with:
-          name: UTM-macos-universal
-      - name: Package for Release
-        run: |
-          tar -xf UTM.xcarchive.tgz
-          ./scripts/package_mac.sh developer-id UTM.xcarchive . "$SIGNING_TEAM_ID" "$PROFILE_UUID" "$HELPER_PROFILE_UUID" "$LAUNCHER_PROFILE_UUID"
-        env:
-          SIGNING_TEAM_ID: ${{ vars.SIGNING_TEAM_ID }}
-          PROFILE_UUID: ${{ vars.PROFILE_UUID }}
-          HELPER_PROFILE_UUID: ${{ vars.HELPER_PROFILE_UUID }}
-          LAUNCHER_PROFILE_UUID: ${{ vars.LAUNCHER_PROFILE_UUID }}
-      - name: Notarize app
-        run: npx notarize-cli --file "UTM.dmg" --bundle-id "com.utmapp.UTM"
-        env:
-          NOTARIZE_USERNAME: ${{ secrets.SIGNING_USERNAME }}
-          NOTARIZE_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
-      - name: Upload Artifact
-        if: github.event_name != 'release'
-        uses: actions/upload-artifact@v3
-        with:
-          name: UTM-dmg
-          path: UTM.dmg
-      - name: Upload Release Asset
-        if: github.event_name == 'release'
-        uses: actions/upload-release-asset@v1.0.2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ github.event.release.upload_url }}
-          asset_path: UTM.dmg
-          asset_name: UTM.dmg
-          asset_content_type: application/octet-stream
-  submit-mac:
-    name: Submit (macOS)
-    runs-on: ${{ fromJSON(needs.configuration.outputs.github-runner) }}
-    needs: [configuration, build-universal]
-    if: github.event_name == 'release' || github.event.inputs.test_release == 'true'
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-      - name: Import signing certificate into keychain
-        uses: apple-actions/import-codesign-certs@v1
-        with:
-          p12-file-base64: ${{ secrets.SIGNING_CERTIFICATE_P12_DATA }}
-          p12-password: ${{ secrets.SIGNING_CERTIFICATE_PASSWORD }}
-      - name: Install Provisioning Profiles
-        run: |
-          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-          echo $PROFILE_DATA | base64 --decode -o ~/Library/MobileDevice/Provisioning\ Profiles/$PROFILE_UUID.provisionprofile
-          echo $HELPER_PROFILE_DATA | base64 --decode -o ~/Library/MobileDevice/Provisioning\ Profiles/$HELPER_PROFILE_UUID.provisionprofile
-          echo $LAUNCHER_PROFILE_DATA | base64 --decode -o ~/Library/MobileDevice/Provisioning\ Profiles/$LAUNCHER_PROFILE_UUID.provisionprofile
-        env:
-          PROFILE_DATA: ${{ vars.APP_STORE_PROFILE_DATA }}
-          PROFILE_UUID: ${{ vars.APP_STORE_PROFILE_UUID }}
-          HELPER_PROFILE_DATA: ${{ vars.APP_STORE_HELPER_PROFILE_DATA }}
-          HELPER_PROFILE_UUID: ${{ vars.APP_STORE_HELPER_PROFILE_UUID }}
-          LAUNCHER_PROFILE_DATA: ${{ vars.APP_STORE_LAUNCHER_PROFILE_DATA }}
-          LAUNCHER_PROFILE_UUID: ${{ vars.APP_STORE_LAUNCHER_PROFILE_UUID }}
-      - name: Download Artifact
-        uses: actions/download-artifact@v3
-        with:
-          name: UTM-macos-universal
-      - name: Package for App Store
-        run: |
-          tar -xf UTM.xcarchive.tgz
-          ./scripts/package_mac.sh app-store UTM.xcarchive . "$SIGNING_TEAM_ID" "$PROFILE_UUID" "$HELPER_PROFILE_UUID" "$LAUNCHER_PROFILE_UUID"
-        env:
-          SIGNING_TEAM_ID: ${{ vars.SIGNING_TEAM_ID }}
-          PROFILE_UUID: ${{ vars.APP_STORE_PROFILE_UUID }}
-          HELPER_PROFILE_UUID: ${{ vars.APP_STORE_HELPER_PROFILE_UUID }}
-          LAUNCHER_PROFILE_UUID: ${{ vars.APP_STORE_LAUNCHER_PROFILE_UUID }}
-      - name: Upload Artifact
-        if: github.event_name != 'release'
-        uses: actions/upload-artifact@v3
-        with:
-          name: UTM-pkg
-          path: UTM.pkg
-      - name: Upload app to App Store Connect
-        if: github.event_name == 'release'
-        run: |
-          xcrun altool --upload-app -t macos -f "UTM.pkg" -u "$SUBMIT_USERNAME" -p "$SUBMIT_PASSWORD"
-        env:
-          SUBMIT_USERNAME: ${{ secrets.SIGNING_USERNAME }}
-          SUBMIT_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
